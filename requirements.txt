@@ -11,3 +11,15 @@ openai==1.31.1 # For embeddings
 tiktoken==0.7.0  # For embeddings 
 
 # install markdown depenendies with: `pip install "unstructured[md]"` after install the requirements file. Leave this line commented out. 
+# langchain
+# langchain-community
+# sentence-transformers
+# chromadb
+# pypdf
+# python-dotenv
+
+fastapi
+uvicorn
+hume
+websockets
+pydantic

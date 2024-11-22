@@ -2,7 +2,7 @@ import asyncio
 import websockets
 import sounddevice as sd
 import numpy as np
-import wave
+from hume import MicrophoneInterface, Stream
 
 async def test_websocket():
     uri = "ws://localhost:8000/ws/stream"
@@ -10,50 +10,65 @@ async def test_websocket():
         async with websockets.connect(uri) as websocket:
             print("Connected to WebSocket")
             
-            print("\nRecording... (speak for 5 seconds)")
-            print("Ask a question about your documents!")
-            
-            # Record audio
+            # Configure audio parameters
             duration = 5
             sample_rate = 44100
             channels = 1
             
+            # Record audio with proper configuration
             recording = sd.rec(
                 int(duration * sample_rate),
                 samplerate=sample_rate,
                 channels=channels,
-                dtype=np.int16
+                dtype=np.int16,
+                blocking=True  # Wait for recording to complete
             )
-            sd.wait()
             print("Recording complete!")
             
-            # Ensure audio is mono
+            # Convert to mono if needed
             if channels > 1:
-                recording = recording.mean(axis=1)
+                recording = recording.mean(axis=1).astype(np.int16)
             
             # Send audio
             audio_bytes = recording.tobytes()
-            print(f"Sending {len(audio_bytes)} bytes of audio data")
             await websocket.send(audio_bytes)
-            print("Waiting for response...")
+            print("Sent audio, waiting for response...")
+            # Create stream for audio playback
+            byte_stream = Stream.new()
+            playback_task = None
             
-            # Handle response
             try:
                 response = await asyncio.wait_for(websocket.recv(), timeout=30.0)
                 
                 if isinstance(response, bytes):
                     print("Received audio response, playing...")
-                    audio_data = np.frombuffer(response, dtype=np.int16)
-                    audio_data = np.int16(audio_data * 0.5)  # Reduce volume
-                    sd.play(audio_data, sample_rate)
-                    sd.wait()
-                    print("Playback complete!")
+                    # Configure audio playback
+                    sd.default.samplerate = sample_rate
+                    sd.default.channels = channels
+                    
+                    # Start playback interface
+                    playback_task = asyncio.create_task(
+                        MicrophoneInterface.play_audio(
+                            byte_stream=byte_stream
+                        )
+                    )
+                    
+                    # Feed audio data to stream
+                    await byte_stream.put(response)
+                    await byte_stream.complete()
+                    
+                    # Wait for playback to complete
+                    if playback_task:
+                        await playback_task
                 else:
                     print(f"Received text response: {response}")
                     
             except asyncio.TimeoutError:
                 print("Timeout waiting for response")
-            
+            finally:
+                if playback_task and not playback_task.done():
+                    playback_task.cancel()
+                    
             print("Closing connection...")
             await asyncio.sleep(1)
                 
@@ -66,3 +81,4 @@ if __name__ == "__main__":
     print("Press Enter to begin...")
     input()
     asyncio.run(test_websocket())
+

@@ -23,6 +23,7 @@ import whisper
 import tempfile
 import wave
 import numpy as np
+from hume import MicrophoneInterface, Stream
 
 load_dotenv()
 
@@ -65,52 +66,124 @@ HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
 if not HUGGINGFACE_API_TOKEN:
     raise ValueError("Missing HUGGINGFACE_API_TOKEN in environment variables")
 
-# Initialize the language model
+
 llm = HuggingFaceHub(
-    repo_id="google/flan-t5-large",  # Better model for conversation
+    repo_id="google/flan-t5-base", 
     huggingfacehub_api_token=HUGGINGFACE_API_TOKEN,
     model_kwargs={
         "temperature": 0.7,
-        "max_length": 512,
+        "max_length": 769,
         "top_p": 0.9
     }
 )
 
 PROMPT_TEMPLATE = """
-You are a health coach based on Andrew Huberman who will help users understand how to optimize their health.
-Use the following context to provide accurate and helpful advice:
+Answer the question based only on the following context:
 
 {context}
 
 ---
 
-User Question: {question}
-
-Please provide advice based on the above context while maintaining a professional and encouraging tone.
+Answer the question based on the above context: {question}
 """
 
 class TranscriptionRequest(BaseModel):
     audio_data: str
     query: Optional[str] = None
 
+# class WebSocketHandler:
+#     def __init__(self):
+#         self.socket = None
+#         self.byte_strs = Stream.new()
+#         # self.audio_complete = asyncio.Event()
+#         # self.collected_audio = bytearray()
+
+#     def set_socket(self, socket: ChatWebsocketConnection):
+#         self.socket = socket
+    
+#     async def on_open(self):
+#         print("WebSocket connection opened")
+
+#     async def on_message(self, message: SubscribeEvent):
+#         print(f"Received message: {message}")
+#         if message.type == "audio_output":
+#             print("Received audio output")
+#             message_str: str = message.data
+#             message_bytes = base64.b64decode(message_str.encode("utf-8"))
+#             await self.byte_strs.put(message_bytes)
+#             return
+        
+#         # elif message.type == "complete":
+#         #     self.audio_complete.set()
+#         #     await self.byte_strs.complete()
+#         # return
+
+#     async def on_close(self):
+#         print("WebSocket connection closed")
+
+#     async def on_error(self, error: Exception):
+#         print(f"Error occurred: {str(error)}")
+
+# class WebSocketHandler:
+#     def __init__(self):
+#         """Construct the WebSocketHandler, initially assigning the socket to None and the byte stream to a new Stream object."""
+#         self.socket = None
+#         self.byte_strs = Stream.new()
+
+#     def set_socket(self, socket: ChatWebsocketConnection):
+#         """Set the socket."""
+#         self.socket = socket
+
+#     async def on_message(self, message: SubscribeEvent):
+#         """Callback function to handle a WebSocket message event."""
+#         print(f"Received message: {message}")
+#         if message.type == "audio_output":
+#             message_str: str = message.data
+#             message_bytes = base64.b64decode(message_str.encode("utf-8"))
+#             await self.byte_strs.put(message_bytes)
+#             return
+
+
+# class WebSocketHandler:
+#     def __init__(self):
+#         self.socket = None
+#         self.byte_strs = Stream.new()
+
+#     def set_socket(self, socket: ChatWebsocketConnection):
+#         self.socket = socket
+    
+#     async def on_open(self):
+#         print("WebSocket connection opened")
+
+#     async def on_message(self, message: SubscribeEvent):
+#         if message.type == "audio_output":
+#             message_str: str = message.data
+#             message_bytes = base64.b64decode(message_str.encode("utf-8"))
+#             await self.byte_strs.put(message_bytes)
+#             return
+
+#     async def on_close(self):
+#         print("WebSocket connection closed")
+
+#     async def on_error(self, error):
+#         print(f"Error: {error}")
+
 class WebSocketHandler:
     def __init__(self):
+        """Construct the WebSocketHandler, initially assigning the socket to None and the byte stream to a new Stream object."""
         self.socket = None
-        self.byte_strs = asyncio.Queue()  # For audio streaming
+        self.byte_strs = Stream.new()
 
     def set_socket(self, socket: ChatWebsocketConnection):
+        """Set the socket."""
         self.socket = socket
-    
-    async def on_open(self):
-        print("WebSocket connection opened")
 
-    # async def on_message(self, data: SubscribeEvent):
-    #     if data.type == "audio_output":
-    #         audio_data = data.audio_data
-    #         await self.byte_strs.put(audio_data)
-    #     print(f"Received message: {data}")
+    async def on_open(self):
+        """Logic invoked when the WebSocket connection is opened."""
+        print("WebSocket connection opened.")
 
     async def on_message(self, message: SubscribeEvent):
+        """Callback function to handle a WebSocket message event."""
         if message.type == "audio_output":
             message_str: str = message.data
             message_bytes = base64.b64decode(message_str.encode("utf-8"))
@@ -118,10 +191,12 @@ class WebSocketHandler:
             return
 
     async def on_close(self):
-        print("WebSocket connection closed")
+        """Logic invoked when the WebSocket connection is closed."""
+        print("WebSocket connection closed.")
 
-    async def on_error(self, error: Exception):
-        print(f"Error occurred: {str(error)}")
+    async def on_error(self, error):
+        """Logic invoked when an error occurs in the WebSocket connection."""
+        print(f"Error: {error}")
 
 # Initialize Whisper model for speech-to-text
 whisper_model = whisper.load_model("base")
@@ -147,14 +222,14 @@ async def stream_audio(websocket: WebSocket):
         verbose=True,
         combine_docs_chain_kwargs={
             "prompt": PromptTemplate(
-                template="""You are a helpful assistant that provides accurate information about Andrew Huberman and his work.
-                Use the following pieces of context to answer the question. If you don't know the answer, just say that you don't know.
+                template="""You are a helpful assistant that provides accurate information based solely on the context provided. Use the following pieces of context to answer the question. If you don't know the answer, just say that you don't know. Don't halucinate or give false information.
 
                 Context: {context}
 
                 Question: {question}
 
                 Helpful Answer: """,
+                # template
                 input_variables=["context", "question"]
             )
         }
@@ -165,17 +240,20 @@ async def stream_audio(websocket: WebSocket):
             try:
                 # Receive audio data from client
                 audio_data = await websocket.receive_bytes()
-                print(f"Received audio data of length: {len(audio_data)}")
                 
-                # Convert bytes to numpy array
+                # Convert bytes to numpy array (ensure proper format)
                 audio_np = np.frombuffer(audio_data, dtype=np.int16)
                 
-                # Save as proper WAV file
+                # Normalize sample rate and channels
+                sample_rate = 44100
+                channels = 1
+                
+                # Save as WAV file with proper parameters
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
                     with wave.open(temp_audio.name, 'wb') as wf:
-                        wf.setnchannels(1)  # Mono
-                        wf.setsampwidth(2)  # 2 bytes per sample (16-bit)
-                        wf.setframerate(44100)  # Sample rate
+                        wf.setnchannels(channels)
+                        wf.setsampwidth(2)  # 16-bit audio
+                        wf.setframerate(sample_rate)
                         wf.writeframes(audio_np.tobytes())
                     temp_audio_path = temp_audio.name
                 
@@ -217,23 +295,23 @@ async def stream_audio(websocket: WebSocket):
                         on_close=websocket_handler.on_close,
                         on_error=websocket_handler.on_error
                     ) as socket:
+                        websocket_handler.set_socket(socket)
+                        
                         # Send text to be converted to speech
-                        user_input = UserInput(
-                            text=answer,
-                            config={
-                                "sample_rate": 44100,
-                                "encoding": "pcm_s16le"
-                            }
+                        user_input = UserInput(text=answer)
+                        await socket.send_user_input(user_input)
+                        
+                        # Create microphone task for audio handling
+                        microphone_task = asyncio.create_task(
+                            MicrophoneInterface.start(
+                                socket,
+                                byte_stream=websocket_handler.byte_strs
+                            )
                         )
                         
-                        await socket.send_user_input(user_input)
-                        audio_response = await websocket_handler.byte_strs.get()
-                        
-                        if audio_response:
-                            print("Sending audio response back to client...")
-                            await websocket.send_bytes(audio_response)
-                            await asyncio.sleep(0.5)
-                
+                        # Wait for audio processing to complete
+                        await microphone_task
+
                 except Exception as e:
                     print(f"Error in text-to-speech: {e}")
                     # Fallback: send text response if audio fails
